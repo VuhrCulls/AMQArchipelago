@@ -139,7 +139,7 @@ for song_link in reversed(song_links):
 
     ##year:
     year = song_link.anime.year
-    option = (f"Year - {year}",year + OFFSET_YEAR)
+    option = (f"Year - {year}", year)
     option_results.append(option)
     option_song_count.append(f"Year - {year}")
     add_song_to_library(song_link, year, f"Year - {year}")

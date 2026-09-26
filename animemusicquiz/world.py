@@ -7,7 +7,7 @@ from collections import namedtuple
 from BaseClasses import ItemClassification, Region, Item
 from worlds.AutoWorld import World
 
-from . import items, locations, regions, AMQSongLibrary
+from . import items, locations, AMQSongLibrary
 from . import options as amq_options
 from .locations import AMQLocation
 from .items import AMQFixedItem, AMQSongItem
@@ -116,6 +116,8 @@ class AMQWorld(World):
                     self.quiz_song_ids[index].append(quiz_songs.pop())
                     self.included_songs[quiz] += 1
                     self.quiz_count[quiz] += 1
+
+        print(self.quiz_count)
 
         quiz_song_sum = sum(self.quiz_count.values())
         if final_quiz_song_count > quiz_song_sum:
