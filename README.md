@@ -1,5 +1,5 @@
 # AMQArchipelago
-Archipelago for [Anime Music Quiz](https://animemusicquiz.com). Currently a Work in Progress
+Archipelago for [Anime Music Quiz](https://animemusicquiz.com). Currently a Work in Progress.
 
 # APWorld
 The APWorld can be found in the releases tab [here](https://github.com/VuhrCulls/AMQArchipelago/releases/latest)
@@ -17,3 +17,6 @@ Just like every other AMQ script, you will need the [Tampermonkey](https://www.t
 - A new pop-up should be visible on AMQ that allows you to enter your AP Connection info (host, port, name, password). Enter them and press 'Connect'
 - Next, create a Solo or Multi lobby and click the newly created 'AMQ AP' button to the left of the 'Start' button.
 - Select your desired quiz and ENJOY
+
+# Quiz Options
+A list of selectable quiz options can be found in `option_list.txt` with the maximum available songs beside their respective quizzes.
