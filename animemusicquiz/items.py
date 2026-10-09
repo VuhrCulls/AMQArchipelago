@@ -10,17 +10,21 @@ if TYPE_CHECKING:
 MAX_QUIZ_COUNT = 10
 
 class OFFSET:
+    QUIZ = 100
+    SONGS = 1000
     FILLER = 70000000
     TRAPS = 80000000
     VICTORY = 90000000
 
 progressive_song_items: Dict[str, int] = {}
+quiz_items: Dict[str, int] = {}
 victory_items: Dict[str, int] = {
     "Victory": OFFSET.VICTORY
 }
 
 for i in range(1, MAX_QUIZ_COUNT + 1):
     progressive_song_items[f"Progressive Song Unlock (Quiz {i})"] = i
+    quiz_items[f"Quiz {i} Unlock"] = OFFSET.QUIZ + i
     victory_items[f"Quiz {i} Clear"] = OFFSET.VICTORY + i
 
 filler_items: Dict[str, int] = {
@@ -33,9 +37,11 @@ trap_items: Dict[str, int] = {
     "FeyFey's Trap - Idols WOOOO": OFFSET.TRAPS + 3,
     "FeyFey's Trap - VN Artists": OFFSET.TRAPS + 4,
     "2+8s End Sample Trap": OFFSET.TRAPS + 5,
+    "Sewim's Trap - ORG": OFFSET.TRAPS + 6,
+    "Alice's Trap - Random Chanting": OFFSET.TRAPS + 7,
 }
 
-ITEM_NAME_TO_ID: Dict[str, int] = progressive_song_items | filler_items | trap_items | victory_items
+ITEM_NAME_TO_ID: Dict[str, int] = progressive_song_items | quiz_items | filler_items | trap_items | victory_items
 
 class AMQFixedItem(Item):
     game: str = "Anime Music Quiz"

@@ -1,6 +1,6 @@
-import json, requests, unicodedata, re
+import json, unicodedata, re, requests
 from typing import Dict, List, NamedTuple
-from .models import Anime, SongLink, Song, SongCategory, Language, AnimeExtendedInfo
+from .models import Anime, SongLink, Song, SongCategory, Language, AnimeExtendedInfo, Type
 from collections import Counter
 
 class SongData(NamedTuple):
@@ -9,12 +9,9 @@ class SongData(NamedTuple):
     composer_id: int
     anime_name: str
     year: int
-    # type: str
-    # category: str
+    song_type: str
+    category: str
     quiz: str
-
-## Settings Offset - unused for now
-OFFSET_YEAR = 1000000
 
 def decode_master_list(master_list):
     for master_anime in master_list['animeMap'].values():
@@ -84,12 +81,34 @@ def add_song_to_library (song_link, id, key):
     normal_anime_name = re.sub('[<>]',"",unicodedata.normalize('NFKD', anime_name).encode('ascii', 'ignore').decode('ascii'))
 
     year = song_link.anime.year
+    if song_link.song.category == SongCategory.UNKNOWN:
+        category = "Unknown"
+    elif song_link.song.category == SongCategory.INSTRUMENTAL:
+        category = "Instrumental"
+    elif song_link.song.category == SongCategory.CHANTING:
+        category = "Chanting"
+    elif song_link.song.category == SongCategory.CHARACTER:
+        category = "Character"
+    elif song_link.song.category == SongCategory.STANDARD:
+        category = "Standard"
+    else:
+        category = "N/A"
 
-    item = (song_id,f"{song_name}", artist_id, composer_id, f"{normal_anime_name}", year, f"{key}")
+    if song_link.type == Type.OPENING:
+        song_type = "OP"
+    elif song_link.type == Type.ENDING:
+        song_type = "ED"
+    elif song_link.type == Type.INSERT:
+        song_type = "IN"
+
+    item = (song_id,f"{song_name}", artist_id, composer_id, f"{normal_anime_name}", year, song_type, category, f"{key}")
     song_results.append(item)
+    #option_song_count.append((artist_id,composer_id,year))
 
 
 ##OPTION_LIST population
+artist_count = []
+composer_count = []
 option_results = []
 option_song_count = []
 
@@ -148,15 +167,26 @@ for song_link in reversed(song_links):
 OPTION_LIST: Dict [str, int] = {option_name: option_id for option_name, option_id in list(set(option_results))}
 OPTION_COUNT: Dict [str, int] = {option_name: option_count for option_name, option_count in Counter(sorted(option_song_count)).items()}
 
-SONG_LIST: Dict[str, SongData] = {f"{song_name} ({key})": SongData(id, artist, composer, anime_name, year, key) for id, song_name, artist, composer, anime_name, year, key in song_results}
+#OPTION_COUNT: Dict [str, int] = {"Artist - Maaya Sakamoto": 87}
+#option_name : option_count for option_name, option_count in Counter((song for song in songData.artist_id) == option_id) in option_song_count
 
 
-with open("option_list.txt", 'w', encoding="utf-8") as f:
+SONG_LIST: Dict[str, SongData] = {f"{song_name} ({key})": SongData(id, artist, composer, anime_name, year, song_type, category, key) for id, song_name, artist, composer, anime_name, year, song_type, category, key in song_results}
+#for option_id in OPTION_LIST.values():
+#    a = Counter(
+#    OPTION_COUNT = {option_id: option_count for
+
+with open("option_list.json", 'w', encoding="utf-8") as f:
+    #json.dump(results, f, ensure_ascii=False)
+    for k,v in OPTION_LIST.items():
+        f.write(f"{k}: {v},\n")
+
+with open("option_count.json", 'w', encoding="utf-8") as f:
     #json.dump(results, f, ensure_ascii=False)
     for k,v in OPTION_COUNT.items():
         f.write(f"{k}: {v},\n")
 
 #with open("song_list.txt", 'w', encoding="utf-8") as f:
     #json.dump(results, f, ensure_ascii=False)
-    #for k,v in SONG_NAME_TO_ID.items():
+    #for k,v in SONG_LIST.items():
         #f.write(f"{SONG_LIST},\n")

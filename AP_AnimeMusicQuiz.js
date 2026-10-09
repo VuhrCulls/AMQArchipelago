@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AP_AnimeMusicQuiz
 // @namespace    http://tampermonkey.net/
-// @version      0.0.0beta
+// @version      0.0.1beta
 // @description  Archipelago client for Anime Music Quiz
 // @author       SakuraPianist
 // @match        https://animemusicquiz.com/*
@@ -13,33 +13,30 @@
 // ==/UserScript==
 
 /* TO DO
-##idk
-!! Hint System I have no idea !!
+!! Hint Window !!
+fixing AMQSongLibrary option count system
 
 ##ARCHIPELAGO SIDE (python)##
-!! Songs with Group Artist + Composers are unusable !! AMQSongLibrary fix
-
-quiz option combos to allow year, type, category randomization from being wack
+quiz option combos to prevent type and category randomization from being wack
 variable regions instead of everything in menu_region -> does this even matter or is it just bc clean code
-algorithm block customization
+algorithm block customization -> alice trap already exists so i should be close
 
 
 ##AMQ SIDE (javascript)##
 find a way to populate finished checks every time you connect
-  -> high scores + unique songid corrects don't come back on game hard reset
+  -> high scores + unique songid corrects don't come back on game hard reset / system change
 backspace doesn't work again
 chat icons
 
 algorithm block customization
 
 no disconnect from ap, only reload amq
-
-toast announcements testing
+-> attempt to reconnect on ap disconnect
 
 Current max quiz count is 20 idk how else except hard code
 -> button gen to match quiz type number
 
- */
+*/
 
 const {Client, itemsHandlingFlags} = await import(
     // Switched to a fork because main repo has a bug on hint ordering
@@ -62,6 +59,17 @@ scriptToast.src = "https://cdn.jsdelivr.net/npm/toastify-js";
 scriptToast.type = "text/javascript";
 document.head.append(scriptToast);
 
+/*
+if (typeof Listener === "undefined") return;
+
+let loadInterval = setInterval(() => {
+  if ($("#loadingScreen").hasClass("hidden")) {
+    clearInterval(loadInterval);
+    setupAPClientListeners();
+  }
+}, 500);
+*/
+
 // Input fields
 const apMenuContainer = document.createElement("div");
 apMenuContainer.id = "apMenu";
@@ -75,7 +83,7 @@ apMenuContainer.innerHTML = `
             <input name="port" placeholder="Port (38281 for local games)"/>
             <input name="slot" placeholder="Slot Name"/>
             <input name="password" placeholder="Password" type="password"/>
-            <button style="color:#555555" type="submit">Connect</button>
+            <button id="apConnectSubmit" style="color:#555555" type="submit">Connect</button>
             <br/>
             <span id="apFormError" class="APhide"></span>
         </fieldset>
@@ -129,6 +137,9 @@ const formStyle = `
     #apConnectionFields:disabled {
         color: white;
     }
+    #apHintForm {
+        color: #515151
+    }
     #apHintForm:disabled {
         color: white;
     }
@@ -141,7 +152,7 @@ consoleInput.disabled = true;
 
 // Console
 consoleInput.addEventListener("keydown", function (event) {
-    if (event.key === "Enter") {
+	if (event.key === "Enter") {
         event.preventDefault();
         window.client.messages.say(consoleInput.value);
         consoleInput.value = "";
@@ -292,12 +303,14 @@ function connectAP(e) {
     window.client.socket.disconnect();
 
     // Set up event listeners
+    // TODO: checked_locations to populate high scores and quiz unlocks
     window.client.socket.on("connected", async (packet) => {
         console.log("Connected to server: ", packet);
         await appendFunctions();
         save();
     });
 
+    // TODO: checked_locations to update high scores, re-sending checks
     window.client.socket.on("roomUpdate", (packet) => {
         console.log("Room update: ", packet);
     });
@@ -315,11 +328,6 @@ function connectAP(e) {
 
             const receiveNewItem = networkItem => {
                 receiveItem(networkItem.item, true);
-                toast(null, {
-                    receiving: window.client.players.self.slot,
-                    item: networkItem,
-                    type: "ItemSend"
-                });
                 difference.push(networkItem.item);
             }
 
@@ -362,6 +370,18 @@ function connectAP(e) {
         }
         console.log("MSG: " + msg);
         toast(msg, packet);
+    });
+
+    window.client.socket.on("disconnected", async (packet) => {
+        console.log("Disconnected from server: ", packet);
+        messageDisplayer.displayMessage(
+                                "Disconnected from AP",
+                                "Please reconnect to the server and re-load AP Quiz before proceeding."
+                            );
+        sendSystemMessage("Disconnected from AP, please reconnect to the server and re-load AP Quiz before proceeding.");
+        fields.disabled = false;
+        consoleInput.disabled = true;
+        document.getElementById("apHintFields").disabled = true;
     });
 
     // Connect to the Archipelago server
@@ -412,27 +432,37 @@ let receivedItems = [];
 let currentList = [];
 let songList = []; //playable songList, 0 final, 1+ indiv. quizzes
 let correctList = []; // unique songids, 1+ indiv. quizzes
-let correctCount = 0; //only current quiz attempt
+let correctCount = []; //only current quiz attempt
 let highScore = []; // 0 final, 1+ indiv. quizzes
 let heldTraps = [];
 let queuedTraps = [];
 let currentIndex = 0;
 let finalQuizEnabled = "Locked";
-let progressiveItems = [];
 let clearItems = [];
+let selectedCustomQuizName = null;
 
 // Fields should be the same as Options.py
 const gameOptions = { //RECHECK
     quiz_counts: {}, //dict
-    quiz_song_list: [], //Master list to populate songList
-    quiz_number: 1,
-    quiz_song_count: 20,
+    quiz_song_list: [],
+    quiz_types: [],
+    progressive_quizzes: false,
+    progressive_songs: false,
+    song_sanity_count: 1000,
+    random_quiz_types: ['Artist', 'Composer', 'Year'],
+    include_quiz_types: [],
+    quiz_song_min: 20,
+    quiz_song_max: 20,
     quiz_goal: 70,
+    final_quiz_unlock: 0,
     final_quiz_song_count: 100,
     final_quiz_goal: 70,
+    quiz_song_list: [], //Master list to populate songList
+    quiz_number: 3,
+    quiz_song_count: 20,
     guess_time: 20,
-    starting_song_count: 5,
-    quiz_types: [],
+    starting_song_count: 1,
+    traps_percentage: 10,
 };
 
 // FIXME: form fields should be stored in a APGame object or something but too much refacto for one commit. quick compat fix and will do at later time
@@ -445,8 +475,17 @@ function save() {
     localStorage.setItem("correctList", JSON.stringify(correctList));
 	localStorage.setItem("highScore", JSON.stringify(highScore));
     localStorage.setItem("queuedTraps", JSON.stringify(queuedTraps));
+	localStorage.setItem("clearItems", JSON.stringify(clearItems));
     localStorage.setItem("host", hostname.value);
     localStorage.setItem("port", port.value);
+
+    //Reconnect values
+    localStorage.setItem("correctCount", JSON.stringify(correctCount));
+    localStorage.setItem("currentList", JSON.stringify(currentList));
+    localStorage.setItem("currentIndex", currentIndex);
+    localStorage.setItem("selectedCustomQuizName", selectedCustomQuizName);
+
+    //AP client values
     if (port.value === "") localStorage.setItem("port", "38281"); //Handle blank port -> default port
     localStorage.setItem("name", name.value);
     localStorage.setItem("password", password.value);
@@ -459,14 +498,28 @@ function load() {
     highScore = JSON.parse(localStorage.getItem("highScore")) || [];
     correctList = JSON.parse(localStorage.getItem("correctList")) || [];
     queuedTraps = JSON.parse(localStorage.getItem("queuedTraps")) || [];
+	clearItems = JSON.parse(localStorage.getItem("clearItems")) || [];
 
     console.log(
-		"Received Items:", receivedItems,
-		"Song List:", songList,
-		"High Score:", highScore,
-		"Correct List:", correctList,
-		"Queued Traps:", queuedTraps
+		"Received Items: ", receivedItems,
+		"Song List: ", songList,
+		"High Score: ", highScore,
+		"Correct List: ", correctList,
+		"Queued Traps: ", queuedTraps,
+		"Clear Items: ", clearItems
 	);
+
+    //Reconnect values
+    correctCount = JSON.parse(localStorage.getItem("correctCount")) || [];
+    receivedItems = JSON.parse(localStorage.getItem("currentList")) || [];
+    currentIndex = localStorage.getItem("currentIndex") || 0;
+    selectedCustomQuizName = localStorage.getItem("selectedCustomQuizName") || null;
+
+    console.log(
+        "correctCount: ", correctCount,
+        "currentList: ", currentList,
+        "currentIndex: ", currentIndex
+    );
 
     let urlParams = new URLSearchParams(window.location.search);
     hostname.value =
@@ -504,12 +557,14 @@ function resetAP(e) {
         songList = [];
         highScore = [];
         correctList = [];
-		progressiveItems = [];
+		clearItems = [];
+        queuedTraps = [];
         localStorage.setItem("songList", "[]");
         localStorage.setItem("highScore", "[]");
         localStorage.setItem("correctList", "[]");
         localStorage.setItem('receivedItems', "[]");
         localStorage.setItem('queuedTraps', "[]");
+		localStorage.setItem("clearItems", "[]");
     }
 }
 
@@ -537,9 +592,13 @@ function toast(message, {receiving, item, type} = {}) {
             let icon;
 
             //Game.Notify("Item received", `<span class="itemSend">${senderName} just found your <b>${name}</b> at ${locationName} !</span>`, icon);
-            sendSystemMessage(`[Item]: ${senderName} just found your ${name} at ${locationName}`);
+            //sendSystemMessage(`[Item]: ${senderName} just found your ${name} at ${locationName}`);
             //OFFSET.ITEMS.isUpgrade(item.item) && Game.NotifyTooltip("function(){return Game.crateTooltip(Game.UpgradesById[" + id + "]);}");
             //OFFSET.ITEMS.isUpgrade(item.item);
+			Toastify({
+				text: `[Item]: ${senderName} just found your ${name} at ${locationName}`,
+				duration: 5000
+			}).showToast();
             window.client.return;
         }
     }
@@ -584,15 +643,17 @@ function toast(message, {receiving, item, type} = {}) {
 
 const OFFSET = {
     ITEMS: {
+		QUIZ: 100,
         FILLERS: 70000000,
         TRAPS: 80000000,
-	VICTORY: 90000000,
+		VICTORY: 90000000,
+		isQuizUnlock: id => Math.floor(id / 100) * 100 === OFFSET.ITEMS.QUIZ,
         isFiller: id => Math.floor(id / 10000000) * 10000000 === OFFSET.ITEMS.FILLERS,
         isTrap: id => Math.floor(id / 10000000) * 10000000 === OFFSET.ITEMS.TRAPS,
         isVictory: id => Math.floor(id / 10000000) * 10000000 === OFFSET.ITEMS.VICTORY,
     },
 	LOCATIONS: { //multiplied by currentIndex
-		SONG: 10000, //theoretical max is 250 songs * 99 quizzes before offset needs to be changed
+		SONG: 1000, //theoretical max is 250 songs * 99 quizzes before offset needs to be changed
 		QUIZ: 1000000, //theoretical max is 59 quizzes before offset needs to be changed
 		FINAL: 60000000,
 	}
@@ -626,12 +687,20 @@ function receiveItem(item, firstTime) {
                 case OFFSET.ITEMS.TRAPS + 4 :
                     console.log("[AP] Receiving FeyFey's Trap - VN Artists:", itemId);
                     break;
-		case OFFSET.ITEMS.TRAPS + 5 :
-			console.log("[AP] Receiving 2+8s End Sample Trap:", itemId);
+				case OFFSET.ITEMS.TRAPS + 5 :
+					console.log("[AP] Receiving 2+8s End Sample Trap:", itemId);
+                    break;
+				case OFFSET.ITEMS.TRAPS + 6 :
+					console.log("[AP] Sewim's Trap - ORG:", itemId);
+                    break;
+                case OFFSET.ITEMS.TRAPS + 7 :
+                    console.log("[AP] Alice's Trap - Random Chanting", itemId);
                     break;
             }
         } else if (OFFSET.ITEMS.isVictory(itemId)) {
-            clearItems.push(itemId);
+            if (!clearItems?.includes(itemId)) {
+                clearItems.push(itemId);
+            }
 			if (itemId === OFFSET.ITEMS.VICTORY) {
 				console.log("[AP] Receiving Victory Item:", itemId);
 				sendCheckIdToAp(90000000);
@@ -639,6 +708,15 @@ function receiveItem(item, firstTime) {
 			} else {
 				console.log("[AP] Receiving Quiz ", itemId - OFFSET.ITEMS.VICTORY," Clear Item:", itemId);
 			}
+		} else if (OFFSET.ITEMS.isQuizUnlock(itemId)) {
+            console.log("[AP] Receiving Quiz Unlock", itemId);
+            if (!gameOptions.progressive_songs) {
+                gameOptions.quiz_song_list[itemId - OFFSET.ITEMS.QUIZ - 1].forEach(function(songId) {
+                    if (!songList[0]?.includes(songId)) {
+                        (songList[0] ??= []).push(songId);
+                    }
+                });
+            }
         } else {
 			console.log("[AP] Receiving Progressive Song Unlock (Quiz ", itemId,")");
 
@@ -678,7 +756,20 @@ async function appendFunctions() {
 
         //Update gameOptions.quiz_types with any randomized quizzes
         gameOptions.quiz_types = Object.keys(gameOptions.quiz_counts);
-        gameOptions.final_quiz_song_count = Math.min(slotData.quiz_song_list.flat().length, gameOptions.final_quiz_song_count);
+        gameOptions.final_quiz_song_count = gameOptions.adjusted_final_quiz_count;
+        gameOptions.song_sanity_count = gameOptions.adjusted_song_sanity_count;
+
+        //Populate entire songList if Progressive Songs are turned off
+        if (!gameOptions.progressive_songs) {
+            gameOptions.quiz_song_list.forEach (function(songs, index) {
+                songList[index + 1] = songs;
+            });
+        }
+
+        //Unlock Combined Quiz if FinalQuizUnlock = 0
+        if (gameOptions.final_quiz_unlock === 0) {
+            finalQuizEnabled = "Unlocked";
+        }
     });
 
     gameAPReady = true;
@@ -721,7 +812,6 @@ let currentQuizData = null;
 let currentQuizId = null;
 let currentQuizInfo = null;
 let selectedCustomQuizId = null;
-let selectedCustomQuizName = null;
 let dataTemplate = [];
 
 // Player list and song tracking state
@@ -739,24 +829,17 @@ let isApplyingRoomSettingsQuiz = false;
 
 function setup() {
     console.log("[AP] Starting setup...");
-    // Always start with AMQ+ disabled on page refresh (don't restore enabled state)
+
+	// Always start with AMQ AP disabled on page refresh (don't restore enabled state)
     amqAPEnabled = false;
-    createUI(); //not created yet, would just want the amq ap button anyways
+    createUI();
     setupListeners();
-    hijackStartButton(); //maybe in the future, could be nice
-    //setupQuizSavedModalObserver(); //no idea what this is for
-    //setupQuizCreatorExportButton();
-    //setupSocketCommandInterceptor(); //possibly needed, we'll see
-
-    //Setup Room Settings hijacking when entering lobby
-    //setupRoomSettingsHijackOnLobbyEnter(); let's just replace this with a fetchquiz()
-
-    //need archipelago setup here
+    hijackStartButton();
 
     console.log("[AP] Setup complete! Enabled:", amqAPEnabled);
 }
 
-function hijackStartButton() { //haven't gotten this to work before
+function hijackStartButton() {
     console.log("[AP] Setting up start button click prevention...");
 
     // Use MutationObserver to watch for start button appearance/changes
@@ -806,10 +889,8 @@ function hijackStartButton() { //haven't gotten this to work before
                         console.log("[AP] Quiz already fetched and ready, allowing start");
                         // Quiz is ready, allow normal start
                     }
-                }
-                // If no AP quiz selected, allow normal start
-            }
-            // If AP not enabled, allow normal start
+                } // If no AP quiz selected, allow normal start
+            } // If AP not enabled, allow normal start
         });
     });
 
@@ -843,7 +924,7 @@ function hijackStartButton() { //haven't gotten this to work before
                 if (amqAPEnabled) {
                     console.log("[AP] Start button clicked, AP enabled, checking quiz status...");
 
-                    if (selectedCustomQuizName && selectedCustomQuizName.startsWith("AP")) {
+                    if (selectedCustomQuizName && selectedCustomQuizName.startsWith("AP ")) {
                         const isQuizReady = quizFetchedBeforeGameStart;
 
                         if (!isQuizReady) {
@@ -873,15 +954,11 @@ function generateCommand() {
     dataTemplate = `{"command":{"command":"save quiz","type":"quizCreator","data":{"quizSave":{"name":"AP test","description":"ew","tags":[],"ruleBlocks":[{"randomOrder":false,"songCount":100,"guessTime":{"guessTime":20,"extraGuessTime":0},"samplePoint":{"samplePoint":[0,100]},"playBackSpeed":{"playBackSpeed":1},"blocks":[{"connectUp":false,"annSongId":22042}],"duplicates":true,"guessModes":{"song":true,"tinyVideo":false,"blurVideo":false}}],"ruleBlockRandomOrder":true},"quizId":null}}}`;
 
     console.log("[AP] Generating Quiz #", currentIndex);
-    console.log(highScore[currentIndex] ??= [0]);
     const data = JSON.parse(dataTemplate);
-    let quizName = gameOptions.quiz_types[currentIndex - 1];
 	let quizBlock = data.command.data.quizSave.ruleBlocks[0];
 
     let songListNew = [];
-
-	//TODO: need to resolve error for songList[currentIndex] returning as undefined
-    shuffle(songList[currentIndex]);
+    shuffle(songList[currentIndex] ??= []);
 	for (let songId of songList[currentIndex]) {
 		songListNew.push({
 			connectUp: false,
@@ -902,14 +979,14 @@ function generateCommand() {
     quizBlock.guessTime.guessTime = gameOptions.guess_time;
 
     //Apply first trap of queuedTraps to lobby
-    if (queuedTraps[0]) { //TODO: modify individual songs instead
+    if (queuedTraps[0]) {
         console.log("Applying Trap", queuedTraps[0]);
         let trapList = [];
 		let songListIndex = [];
 		for (let i = 0; i < 10; i++) {
 			songListIndex.push(Math.floor(Math.random() * songListNew.length));
 		}
-        console.log(songListIndex);
+        trapState = false;
         switch (queuedTraps[0]) {
             case OFFSET.ITEMS.TRAPS + 1 : // generic double speed
 				sendSystemMessage("⚠️ Double Speed Trap applied");
@@ -1023,6 +1100,29 @@ function generateCommand() {
 					songListNew[index] = trapSong
 				}
                 break;
+			case OFFSET.ITEMS.TRAPS + 6 : // sewim trap org
+				sendSystemMessage("⚠️ ORG Trap applied (by: Sewim)");
+                for (let index of songListIndex) {
+                    let trapSong = {
+                        connectUp: false,
+                        locked: false,
+                        annSongId: songListNew[index].annSongId,
+                        guessTime: {
+                            guessTime: 1,
+                            extraGuessTime: 15
+                        }
+                    };
+					songListNew[index] = trapSong
+				}
+                break;
+            case OFFSET.ITEMS.TRAPS + 7 : //alice trap random chanting
+                sendSystemMessage("⚠️ Random Chanting Trap applied (by: Alice)");
+                sendSystemMessage("⚠️ Algorithm Block Trap detected - Unique SongID Checks temporarily disabled");
+                // TODO: Disgustingly long Algorithm block
+                songListNew.unshift({"locked":false,"settings":{"tags":[],"type":{"tv":true,"ona":true,"ova":true,"movie":true,"special":true},"genre":[],"vintage":{"standardValue":{"years":[1924,2026],"seasons":[0,3]},"advancedValueList":[]},"songType":{"advancedValue":{"random":10,"endings":0,"inserts":0,"openings":0},"standardValue":{"endings":true,"inserts":true,"openings":true}},"modifiers":{"dubSongs":true,"duplicates":true,"rebroadcastSongs":true},"animeScore":{"advancedOn":false,"advancedValue":[true,true,true,true,true,true,true,true,true],"standardValue":[2,10]},"playerScore":{"advancedOn":false,"advancedValue":[true,true,true,true,true,true,true,true,true,true],"standardValue":[1,10]},"numberOfSongs":10,"songSelection":{"advancedValue":{"random":10,"watched":0,"unwatched":0},"standardValue":1},"songPopularity":{"advancedOn":false,"advancedValue":[0,100],"standardValue":{"liked":true,"mixed":true,"disliked":true}},"animePopularity":{"advancedOn":false,"advancedValue":[1,9999],"standardValue":5},"songDifficulity":{"advancedOn":false,"advancedValue":[0,100],"standardValue":{"easy":true,"hard":true,"expert":true,"medium":true,"beginner":true}},"endingCategories":{"chanting":true,"standard":false,"character":false,"instrumental":false},"insertCategories":{"chanting":true,"standard":false,"character":false,"instrumental":false},"openingCategories":{"chanting":true,"standard":false,"character":false,"instrumental":false},"watchedDistribution":1},"connectUp":false});
+                quizBlock.randomOrder = true;
+                trapState = true;
+                break;
         }
     }
 
@@ -1103,9 +1203,6 @@ function handleQuizListResponse(payload) {
     isWaitingForQuizList = false;
     const quizzes = payload.data?.quizzes || payload.quizzes || [];
 
-    console.log("[AP] Total quizzes in list:", quizzes.length);
-    console.log("[AP] Quiz names:", quizzes.map(q => q.name));
-
     // Find existing quiz by exact name match
     const quizName = pendingQuizData?.command?.data?.quizSave?.name;
     let existingQuiz = null;
@@ -1179,7 +1276,7 @@ function saveQuiz(data, quizId) {
             } catch (e) {
                 console.warn("[AP] Could not rebind AMQ quiz save listener:", e);
             }
-        }, 5000);
+        }, 3000);
     }
 }
 
@@ -1225,33 +1322,6 @@ function applyQuizToLobby(quizId, quizName) {
 function setupListeners() {
     console.log("[AP] Setting up event listeners...");
 
-    new Listener("quiz display custom quiz", (payload) => {
-        console.log("[AP] Quiz display custom quiz event received:", payload);
-        const quizDesc = payload.data?.quizDescription || payload.quizDescription;
-        if (quizDesc) {
-            console.log("[AP] Quiz description object:", quizDesc);
-            console.log("[AP] Quiz name:", quizDesc.name);
-            console.log("[AP] Quiz description:", quizDesc.description);
-            console.log("[AP] Quiz creatorName:", quizDesc.creatorName);
-
-            if (quizDesc.name && quizDesc.name.startsWith("AP")) {
-                const cleanName = quizDesc.name.startsWith("AP ") ? quizDesc.name.substring(3) : quizDesc.name;
-                currentQuizInfo = {
-                    name: cleanName,
-                    description: quizDesc.description || null,
-                    creatorUsername: quizDesc.creatorName || null
-                };
-                console.log("[AP] Stored quiz info for AP quiz:", currentQuizInfo);
-            } else {
-                console.log("[AP] Quiz name does not start with 'AP', not storing quiz info. Name:", quizDesc.name);
-                currentQuizInfo = null;
-            }
-        } else {
-            console.warn("[AP] No quiz description found in payload");
-            currentQuizInfo = null;
-        }
-    }).bindListener();
-
     new Listener("quiz end result", (payload) => {
         // Reset quiz fetched flag when quiz ends (allows loading new quiz for next game)
         quizFetchedBeforeGameStart = false;
@@ -1268,7 +1338,9 @@ function setupListeners() {
         quizFetchedBeforeGameStart = false;
 
         console.log("[AP] Quiz over, reset quiz fetched flag");
-        generateCommand();
+        if (amqAPEnabled) {
+            generateCommand();
+        }
 
     }).bindListener();
 
@@ -1276,33 +1348,11 @@ function setupListeners() {
         console.log("[AP] Custom quiz selected event received:", payload);
         const quizDesc = payload.data?.quizDescription || payload.quizDescription;
         if (quizDesc) {
-            selectedCustomQuizId = quizDesc.customQuizId;
             selectedCustomQuizName = quizDesc.name;
-            console.log("[AP] Custom quiz selected:", selectedCustomQuizName, "ID:", selectedCustomQuizId);
-            console.log("[AP] Full quiz description:", quizDesc);
-
-            if (quizDesc.name && quizDesc.name.startsWith("AP ")) {
-                const cleanName = quizDesc.name.startsWith("AP ") ? quizDesc.name.substring(3) : quizDesc.name;
-                currentQuizInfo = {
-                    name: cleanName,
-                    description: quizDesc.description || null,
-                    creatorUsername: quizDesc.creatorName || null
-                };
-                console.log("[AP] Stored quiz info from 'custom quiz selected' event:", currentQuizInfo);
-                // Mark that quiz was fetched before game start
-                quizFetchedBeforeGameStart = true;
-                console.log("[AP] Quiz fetched before game start, flag set");
-            } else {
-                currentQuizInfo = null;
-            }
-        } else {
-            console.warn("[AP] Custom quiz selected event missing quizDescription:", payload);
-            currentQuizInfo = null;
         }
     }).bindListener();
 
     new Listener("load builder quizzes", (payload) => {
-        console.log("[AP] Quiz list loaded event received");
         handleQuizListResponse(payload);
     }).bindListener();
 
@@ -1326,6 +1376,7 @@ function setupListeners() {
             }
 
             applyQuizToLobby(newQuizId, quizName);
+            save();
 
         } else {
             console.error("[AP] Save quiz command failed:", payload);
@@ -1340,33 +1391,24 @@ function setupListeners() {
             return;
         }
 
-        if (amqAPEnabled && selectedCustomQuizName && selectedCustomQuizName.startsWith("AMQ+")) {
+        if (amqAPEnabled && selectedCustomQuizName && selectedCustomQuizName.startsWith("AP ")) {
             console.log("[AP] Game starting");
         }
         currentSongNumber = 0;
-        correctCount = 0;
+        correctCount = [];
     }).bindListener();
 
-	// TODO: Don't really use chat for commands yet
 	// ENDGAME: Make AMQ chat work with archipelago client
-    /*
 	new Listener("game chat update", (payload) => {
         for (let message of payload.messages) {
             // Check if message is a command
             const msgLower = message.message.toLowerCase();
-            if (msgLower.startsWith('/amqap')) {
+            if (msgLower.startsWith('/ap')) {
                 // Commands that work locally for everyone (info, sources, dist)
-                const localCommands = ['info', 'metadata', 'sources', 'distribution', 'dist'];
+                const localCommands = ['reconnect'];
                 const commandParts = msgLower.split(' ');
                 const commandName = commandParts[1];
                 const isLocalCommand = localCommands.includes(commandName);
-
-                // Local commands work for everyone, even when not in lobby
-                // Always allow local commands from self, regardless of lobby state
-                if (isLocalCommand && message.sender === selfName) {
-                    handleChatCommand(msgLower);
-                    continue;
-                }
 
                 // Other commands require lobby and host status
                 if (typeof lobby !== 'undefined' && lobby.inLobby) {
@@ -1393,19 +1435,12 @@ function setupListeners() {
     new Listener("Game Chat Message", (payload) => {
         // Check if message is a command
         const msgLower = payload.message.toLowerCase();
-        if (msgLower.startsWith('/amqap') || msgLower === '/1v1debug' || msgLower === '/1v1results') {
+        if (msgLower.startsWith('/ap')) {
             // Commands that work locally for everyone (info, sources, dist)
-            const localCommands = ['info', 'metadata', 'sources', 'distribution', 'dist'];
+            const localCommands = ['reconnect'];
             const commandParts = msgLower.split(' ');
             const commandName = commandParts[1];
             const isLocalCommand = localCommands.includes(commandName);
-
-            // Local commands work for everyone, even when not in lobby
-            // Always allow local commands from self, regardless of lobby state
-            if (isLocalCommand && payload.sender === selfName) {
-                handleChatCommand(msgLower);
-                return;
-            }
 
             // Other commands require lobby and host status
             if (typeof lobby !== 'undefined' && lobby.inLobby) {
@@ -1427,7 +1462,6 @@ function setupListeners() {
             }
         }
     }).bindListener();
-	*/
 
     new Listener("play next song", (payload) => {
         if (payload && payload.songNumber) {
@@ -1437,59 +1471,89 @@ function setupListeners() {
     }).bindListener();
 
     new Listener("answer results", (data) => {
-        if (!amqAPEnabled || !selectedCustomQuizName || !selectedCustomQuizName.startsWith("AP")) {
+        if (!amqAPEnabled || !selectedCustomQuizName || !selectedCustomQuizName.startsWith("AP ")) {
+            console.log("caught by selectedquiz variables");
             return;
         }
 
-        // Only host sends song source messages to global chat
+        // Only host can send AP checks
         if (typeof lobby !== 'undefined' && lobby.inLobby && !lobby.isHost) {
+            console.log("caught by whatever tf this is");
             return;
         }
 
         let isCorrect = quiz.isSpectator ? false : data.players.find(player => player.gamePlayerId === quiz.ownGamePlayerId)?.correct;
-        correctCount += isCorrect;
-        let currentSongId = currentList[currentSongNumber - 1];
+        if (isCorrect) {
+            if (!correctCount.includes(currentSongNumber)) {
+                correctCount.push(currentSongNumber);
+            }
+            let currentSongId = currentList[currentSongNumber - 1];
 
-        if (isCorrect && songList[0].includes(currentSongId) && !correctList[currentIndex]?.includes(currentSongId)) {
-			if (currentIndex === 0) { //TODO: currently cannot unlock unique songid checks in final quiz
-				console.log("[AP] Skipping Unique Correct annSongId Check - Playing Final Quiz");
-			} else {
-				console.log("[AP] Unique Correct annSongId: [", currentSongId, "]");
-				(correctList[currentIndex] ??= []).push(currentSongId);
-				try {
-					sendCheckIdToAp((OFFSET.LOCATIONS.SONG * currentIndex) + correctList[currentIndex].length);
-				} catch (e) {
-					console.error("[AP] check did not send");
-					correctList[currentIndex].pop();
-				}
-				save();
-			}
-        }
-        if (correctCount > (highScore[currentIndex] ??= [])) {
-            console.log("[AP] New High Score detected [",correctCount, "/",songList[currentIndex].length,"]");
-            if (currentIndex === 0) {
+            if (songList[0].includes(currentSongId) && !correctList.includes(currentSongId) && !trapState) {
+                console.log("[AP] Unique Correct annSongId: [", currentSongId, "]");
+                correctList.push(currentSongId);
                 try {
-                    sendCheckIdToAp(correctCount + OFFSET.LOCATIONS.FINAL);
-                    highScore[currentIndex] = correctCount;
-                    localStorage.setItem("highScore", JSON.stringify(highScore));
-                    console.log("Current High Score:", highScore[currentIndex]);
+                    sendCheckIdToAp(OFFSET.LOCATIONS.SONG + correctList.length);
                 } catch (e) {
                     console.error("[AP] check did not send");
-                }
-            } else {
-                try {
-                    sendCheckIdToAp(correctCount + (OFFSET.LOCATIONS.QUIZ * currentIndex));
-                    highScore[currentIndex] = correctCount;
-                    localStorage.setItem("highScore", JSON.stringify(highScore));
-                    console.log("Current High Score:", highScore[currentIndex]);
-                } catch (e) {
-                    console.error("[AP] check did not send");
+                    correctList.pop();
                 }
             }
+            if (correctCount.length > (highScore[currentIndex] ??= [])) {
+                console.log("[AP] New High Score detected [",correctCount.length, "/",songList[currentIndex].length,"]");
+                if (currentIndex === 0) {
+                    try {
+                        sendCheckIdToAp(correctCount.length + OFFSET.LOCATIONS.FINAL);
+                        highScore[currentIndex] = correctCount.length;
+                        console.log("Current High Score:", highScore[currentIndex]);
+                    } catch (e) {
+                        console.error("[AP] check did not send");
+                        correctCount.pop();
+                    }
+                } else {
+                    try {
+                        sendCheckIdToAp(correctCount.length + (OFFSET.LOCATIONS.QUIZ * currentIndex));
+                        highScore[currentIndex] = correctCount.length;
+                        console.log("Current High Score:", highScore[currentIndex]);
+                    } catch (e) {
+                        console.error("[AP] check did not send");
+                        correctCount.pop();
+                    }
+                }
+            }
+            save();
         }
     }).bindListener();
 
     console.log("[AP] Event listeners set up complete");
+}
+
+function handleChatCommand(msg) {
+	console.log("[AP] Chat message from self:", msg);
+
+	const parts = msg.split(" ");
+
+	if (parts[1] === "reconnect") {
+		console.log("[AP] Reconnect command received");
+
+		// Disable script in restricted modes (Jam, Ranked, Themed)
+		if (shouldDisableScript()) {
+			sendSystemMessage("⚠️ AMQ AP is disabled in Jam, Ranked, and Themed modes.");
+			amqAPEnabled = false;
+			updateToggleButton();
+			return;
+		}
+
+		// Only host can toggle AMQ AP via command
+		if (typeof lobby !== 'undefined' && lobby.inLobby && !lobby.isHost) {
+			sendSystemMessage("⚠️ Only the room host can enable or configure AMQ AP.");
+			return;
+		}
+		amqAPEnabled = true;
+		updateToggleButton();
+        selectedCustomQuizName = "AP Reconnect";
+		sendSystemMessage("AMQ AP " + (amqAPEnabled ? "enabled" : "disabled"));
+    }
 }
 
 function createHubModalHTML() {
@@ -1564,7 +1628,7 @@ function createUI() {
     $("#amqAPToggle").click(() => {
         console.log("[AP] AP button clicked");
 
-        // Only allow host to open AMQ+ hub
+        // Only allow host to open AMQ AP hub
         if (typeof lobby !== 'undefined' && lobby.inLobby && !lobby.isHost) {
             sendSystemMessage("⚠️ Only the room host can enable or configure AP.");
             return;
@@ -1603,9 +1667,12 @@ function attachHubHandlers() {
 			return;
 		}
 
-        //TODO: check for quiz clear items
         if (finalQuizEnabled === "Locked") {
             sendSystemMessage("⚠️ Final quiz locked, clear all other quizzes to unlock");
+			messageDisplayer.displayMessage(
+                                "Final Quiz Locked",
+								"Clear all other quizzes to unlock"
+                            );
             $("#amqAPHubModal").modal("hide");
             return;
         }
@@ -1648,10 +1715,7 @@ function attachHubHandlers() {
 		console.log("[AP] Quiz Select Button Pressed");
 
 		amqAPEnabled = true;
-        console.log(e.target.className.slice(-2));
 		currentIndex = Number(e.target.className.slice(-2));
-        e.target.textContent = 'wow that worked here first';
-        updateQuizButtons();
 		updateToggleButton();
 		generateCommand();
 	});
@@ -1662,7 +1726,7 @@ function attachHubHandlers() {
 
 		// Only host can disable AMQ AP
 	    if (typeof lobby !== 'undefined' && lobby.inLobby && !lobby.isHost) {
-			sendSystemMessage("⚠️ Only the room host can enable or configure AMQ+.");
+			sendSystemMessage("⚠️ Only the room host can enable or configure AMQ AP.");
 			$("#amqPlusHubModal").modal("hide");
 			return;
 		}
@@ -1702,14 +1766,30 @@ function updateQuizButtons() {
 	console.log("[AP] Updating quiz buttons");
 
     //Final Quiz Unlock
-    if (finalQuizEnabled === "Locked" && clearItems?.length >= gameOptions.quiz_types.length) {
+    if (finalQuizEnabled === "Locked" && clearItems?.length >= (Math.ceil(gameOptions.quiz_types.length / gameOptions.quiz_goal))) {
         finalQuizEnabled = "Unlocked";
+        messageDisplayer.displayMessage("Final Quiz Unlocked");
         sendSystemMessage("Final Quiz Unlocked!!");
     }
 
     const button = document.querySelectorAll('.amqAPHubQuizBtn');
     button.forEach (function(button, index) {
-        button.textContent = `${gameOptions.quiz_types[index] || "N/A"} [${highScore[index + 1] || 0} / ${songList[index + 1]?.length || 0}]`
+
+		//Check for Progressive Quizzes
+		if (gameOptions.progressive_quizzes) {
+			button.disabled = true;
+			let quizUnlockId = OFFSET.ITEMS.QUIZ + index + 1
+			if (receivedItems.includes(quizUnlockId)) {
+				button.disabled = false;
+			}
+		}
+
+		//Check for Quiz Clear items
+		if (gameOptions.final_quiz_unlock > 0 && receivedItems.includes(OFFSET.ITEMS.VICTORY + index + 1)) {
+			button.textContent = `✅ ${gameOptions.quiz_types[index] || "N/A"} [${highScore[index + 1] || 0} / ${songList[index + 1]?.length || 0}]`
+		} else {
+			button.textContent = `${gameOptions.quiz_types[index] || "N/A"} [${highScore[index + 1] || 0} / ${songList[index + 1]?.length || 0}]`
+		}
     });
     document.getElementById('amqAPHubFinalQuizName').textContent = `Final Quiz (${finalQuizEnabled}) [${highScore[0] || 0} / ${songList[0]?.length || 0}]`
 }
