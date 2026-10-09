@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AP_AnimeMusicQuiz
 // @namespace    http://tampermonkey.net/
-// @version      0.0.1beta
+// @version      0.0.1-alpha
 // @description  Archipelago client for Anime Music Quiz
 // @author       SakuraPianist
 // @match        https://animemusicquiz.com/*
